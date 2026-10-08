@@ -37,60 +37,55 @@ jobs:
 
           fs.mkdirSync("dist", { recursive: true });
 
-          // 1. Copy the whole source repo into the site root (index.svg, static/, svg/, etc.)
-          fs.cpSync("src", "dist", {
-            recursive: true,
-            filter: (p) => {
-              const rel = path.relative("src", p);
-              return !(rel === ".git" || rel.startsWith(".git" + path.sep) ||
-                       rel === ".github" || rel.startsWith(".github" + path.sep));
-            }
-          });
+          const skipGit = (p) => !p.split(path.sep).some(s => s === ".git" || s === ".github");
+
+          // 1. Copy the whole source repo into the site root, keeping folder layout
+          fs.cpSync("src", "dist", { recursive: true, filter: skipGit });
           fs.writeFileSync(path.join("dist", ".nojekyll"), "");
 
-          // Find index.svg anywhere in the repo and promote its folder to the site root
-          const findIndexSvg = (dir) => {
+          // 2. Find the main SVG (index.svg first, then site.svg) and promote its folder to the root
+          const findFile = (dir, name) => {
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (const e of entries) {
-              if (e.isFile() && e.name === "index.svg") return path.join(dir, e.name);
+              if (e.isFile() && e.name === name) return path.join(dir, e.name);
             }
             for (const e of entries) {
               if (!e.isDirectory() || e.name === ".git" || e.name === ".github") continue;
-              const r = findIndexSvg(path.join(dir, e.name));
+              const r = findFile(path.join(dir, e.name), name);
               if (r) return r;
             }
             return null;
           };
-          const foundSvg = findIndexSvg("src");
-          if (foundSvg) {
-            const appDir = path.dirname(foundSvg);
-            fs.cpSync(appDir, "dist", {
-              recursive: true,
-              filter: (p) => !p.split(path.sep).some(s => s === ".git" || s === ".github")
-            });
-            console.log("App folder promoted to root:", appDir);
-          } else {
-            console.log("No index.svg found anywhere in the repo");
+
+          let mainFile = null;
+          for (const name of ["index.svg", "site.svg"]) {
+            const found = findFile("src", name);
+            if (found) {
+              fs.cpSync(path.dirname(found), "dist", { recursive: true, filter: skipGit });
+              mainFile = name;
+              console.log("Main file:", found);
+              break;
+            }
           }
+          if (!mainFile) console.log("No index.svg or site.svg found anywhere in the repo");
 
           const base = "/" + process.env.REPO_NAME + "/";
-          const hasIndexSvg = fs.existsSync("dist/index.svg");
           const hasCss = fs.existsSync("dist/static/css.css");
           const hasJs = fs.existsSync("dist/static/js.js");
 
-          // 2. Build the page that every mirror path serves
+          // 3. Page that every mirror path serves
           let page;
-          if (hasIndexSvg) {
+          if (mainFile) {
             page = `<!DOCTYPE html>
           <html lang="en"><head><meta charset="UTF-8">
           <base href="${base}">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <link rel="icon" href="index.svg" type="image/svg+xml">
+          <link rel="icon" href="${mainFile}" type="image/svg+xml">
           <title>App</title>
           ${hasCss ? `<link rel="stylesheet" href="static/css.css">` : ""}
-          <style>html,body{margin:0;width:100%;height:100%;overflow:hidden}object{width:100%;height:100%;border:none}</style>
+          <style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}object{width:100%;height:100%;border:none}</style>
           ${hasJs ? `<script src="static/js.js"></script>` : ""}
-          </head><body><object data="index.svg" type="image/svg+xml"></object></body></html>`;
+          </head><body><object data="${mainFile}" type="image/svg+xml"></object></body></html>`;
           } else {
             const svgs = fs.existsSync("dist/svg")
               ? fs.readdirSync("dist/svg").filter(f => f.endsWith(".svg")).sort() : [];
@@ -100,18 +95,16 @@ jobs:
           <base href="${base}">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <title>SVG Library</title>
-          ${hasCss ? `<link rel="stylesheet" href="static/css.css">` : ""}
           <style>body{font-family:system-ui;margin:2rem}ul{columns:3}</style>
-          ${hasJs ? `<script src="static/js.js"></script>` : ""}
           </head><body><h1>SVG Library</h1><ul>${list}</ul></body></html>`;
           }
 
-          // Root page replaces any index.html from the source; 404 serves the same page
+          // Root redirects to the link list; 404 serves the app
           const redirect = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0; url=${base}links.html"><script>location.replace("${base}links.html")</script><title>Redirecting</title></head><body><a href="${base}links.html">Continue</a></body></html>`;
           fs.writeFileSync("dist/index.html", redirect);
           fs.writeFileSync("dist/404.html", page);
 
-          // 3. Generate random nested mirror paths
+          // 4. Generate random nested mirror paths
           const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
           const seg = (a, b) => {
             const n = Math.floor(Math.random() * (b - a + 1)) + a;
@@ -136,10 +129,11 @@ jobs:
 
           fs.writeFileSync("dist/mirror-links.txt", [...paths].map(p => base + p + "/").join("\n"));
 
-          // 4. Directory page listing every mirror, with a filter box
+          // 5. Directory page listing every mirror, with a filter box
           const cards = [...paths].map(p => `<a href="${base}${p}/">${p}</a>`).join("\n");
           fs.writeFileSync("dist/links.html", `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Mirror links</title><style>body{font-family:system-ui;margin:2rem;background:#0d1117;color:#c9d1d9}input{width:100%;max-width:500px;padding:10px;margin-bottom:1rem}.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}a{color:#58a6ff;font:12px monospace;word-break:break-all;padding:8px;border:1px solid #30363d;border-radius:6px;text-decoration:none}</style></head><body><h1>${paths.size} mirror links</h1><input id="f" placeholder="Filter..."><div class="g" id="g">${cards}</div><script>document.getElementById("f").oninput=e=>{const t=e.target.value.toLowerCase();document.querySelectorAll("#g a").forEach(a=>{a.style.display=a.textContent.includes(t)?"":"none"})}</script></body></html>`);
-          console.log("index.svg:", hasIndexSvg, "| css:", hasCss, "| js:", hasJs, "| mirrors:", paths.size);
+
+          console.log("main:", mainFile, "| css:", hasCss, "| js:", hasJs, "| mirrors:", paths.size);
           '
 
       - uses: actions/upload-pages-artifact@v3
