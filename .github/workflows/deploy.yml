@@ -48,6 +48,31 @@ jobs:
           });
           fs.writeFileSync(path.join("dist", ".nojekyll"), "");
 
+          // Find index.svg anywhere in the repo and promote its folder to the site root
+          const findIndexSvg = (dir) => {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const e of entries) {
+              if (e.isFile() && e.name === "index.svg") return path.join(dir, e.name);
+            }
+            for (const e of entries) {
+              if (!e.isDirectory() || e.name === ".git" || e.name === ".github") continue;
+              const r = findIndexSvg(path.join(dir, e.name));
+              if (r) return r;
+            }
+            return null;
+          };
+          const foundSvg = findIndexSvg("src");
+          if (foundSvg) {
+            const appDir = path.dirname(foundSvg);
+            fs.cpSync(appDir, "dist", {
+              recursive: true,
+              filter: (p) => !p.split(path.sep).some(s => s === ".git" || s === ".github")
+            });
+            console.log("App folder promoted to root:", appDir);
+          } else {
+            console.log("No index.svg found anywhere in the repo");
+          }
+
           const base = "/" + process.env.REPO_NAME + "/";
           const hasIndexSvg = fs.existsSync("dist/index.svg");
           const hasCss = fs.existsSync("dist/static/css.css");
@@ -82,7 +107,8 @@ jobs:
           }
 
           // Root page replaces any index.html from the source; 404 serves the same page
-          fs.writeFileSync("dist/index.html", page);
+          const redirect = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0; url=${base}links.html"><script>location.replace("${base}links.html")</script><title>Redirecting</title></head><body><a href="${base}links.html">Continue</a></body></html>`;
+          fs.writeFileSync("dist/index.html", redirect);
           fs.writeFileSync("dist/404.html", page);
 
           // 3. Generate random nested mirror paths
