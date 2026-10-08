@@ -1,0 +1,127 @@
+name: Build site from GUST with 5,000 mirror paths
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the source repo
+        uses: actions/checkout@v4
+        with:
+          repository: nautilus-os/GUST
+          path: src
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build site and mirror paths
+        env:
+          REPO_NAME: ${{ github.event.repository.name }}
+          TOTAL_PAGES: "5000"
+        run: |
+          node -e '
+          const fs = require("fs");
+          const path = require("path");
+
+          fs.mkdirSync("dist", { recursive: true });
+
+          // 1. Copy the whole source repo into the site root (index.svg, static/, svg/, etc.)
+          fs.cpSync("src", "dist", {
+            recursive: true,
+            filter: (p) => {
+              const rel = path.relative("src", p);
+              return !(rel === ".git" || rel.startsWith(".git" + path.sep) ||
+                       rel === ".github" || rel.startsWith(".github" + path.sep));
+            }
+          });
+          fs.writeFileSync(path.join("dist", ".nojekyll"), "");
+
+          const base = "/" + process.env.REPO_NAME + "/";
+          const hasIndexSvg = fs.existsSync("dist/index.svg");
+          const hasCss = fs.existsSync("dist/static/css.css");
+          const hasJs = fs.existsSync("dist/static/js.js");
+
+          // 2. Build the page that every mirror path serves
+          let page;
+          if (hasIndexSvg) {
+            page = `<!DOCTYPE html>
+          <html lang="en"><head><meta charset="UTF-8">
+          <base href="${base}">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <link rel="icon" href="index.svg" type="image/svg+xml">
+          <title>App</title>
+          ${hasCss ? `<link rel="stylesheet" href="static/css.css">` : ""}
+          <style>html,body{margin:0;width:100%;height:100%;overflow:hidden}object{width:100%;height:100%;border:none}</style>
+          ${hasJs ? `<script src="static/js.js"></script>` : ""}
+          </head><body><object data="index.svg" type="image/svg+xml"></object></body></html>`;
+          } else {
+            const svgs = fs.existsSync("dist/svg")
+              ? fs.readdirSync("dist/svg").filter(f => f.endsWith(".svg")).sort() : [];
+            const list = svgs.map(f => `<li><a href="svg/${f}">${f}</a></li>`).join("\n");
+            page = `<!DOCTYPE html>
+          <html lang="en"><head><meta charset="UTF-8">
+          <base href="${base}">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>SVG Library</title>
+          ${hasCss ? `<link rel="stylesheet" href="static/css.css">` : ""}
+          <style>body{font-family:system-ui;margin:2rem}ul{columns:3}</style>
+          ${hasJs ? `<script src="static/js.js"></script>` : ""}
+          </head><body><h1>SVG Library</h1><ul>${list}</ul></body></html>`;
+          }
+
+          // Root page replaces any index.html from the source; 404 serves the same page
+          fs.writeFileSync("dist/index.html", page);
+          fs.writeFileSync("dist/404.html", page);
+
+          // 3. Generate random nested mirror paths
+          const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+          const seg = (a, b) => {
+            const n = Math.floor(Math.random() * (b - a + 1)) + a;
+            let s = "";
+            for (let i = 0; i < n; i++) s += chars[Math.floor(Math.random() * chars.length)];
+            return s;
+          };
+          const nested = () => {
+            const d = Math.floor(Math.random() * 3) + 2;
+            return Array.from({ length: d }, () => seg(4, 10)).join("/");
+          };
+
+          const total = parseInt(process.env.TOTAL_PAGES, 10);
+          const paths = new Set();
+          while (paths.size < total) paths.add(nested());
+
+          for (const p of paths) {
+            const dir = path.join("dist", p);
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, "index.html"), page);
+          }
+
+          fs.writeFileSync("dist/mirror-links.txt", [...paths].map(p => base + p + "/").join("\n"));
+          console.log("index.svg:", hasIndexSvg, "| css:", hasCss, "| js:", hasJs, "| mirrors:", paths.size);
+          '
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
