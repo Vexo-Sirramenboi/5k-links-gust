@@ -109,6 +109,10 @@ jobs:
           }
 
           fs.writeFileSync("dist/mirror-links.txt", [...paths].map(p => base + p + "/").join("\n"));
+
+          // 4. Directory page listing every mirror, with a filter box
+          const cards = [...paths].map(p => `<a href="${base}${p}/">${p}</a>`).join("\n");
+          fs.writeFileSync("dist/links.html", `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Mirror links</title><style>body{font-family:system-ui;margin:2rem;background:#0d1117;color:#c9d1d9}input{width:100%;max-width:500px;padding:10px;margin-bottom:1rem}.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}a{color:#58a6ff;font:12px monospace;word-break:break-all;padding:8px;border:1px solid #30363d;border-radius:6px;text-decoration:none}</style></head><body><h1>${paths.size} mirror links</h1><input id="f" placeholder="Filter..."><div class="g" id="g">${cards}</div><script>document.getElementById("f").oninput=e=>{const t=e.target.value.toLowerCase();document.querySelectorAll("#g a").forEach(a=>{a.style.display=a.textContent.includes(t)?"":"none"})}</script></body></html>`);
           console.log("index.svg:", hasIndexSvg, "| css:", hasCss, "| js:", hasJs, "| mirrors:", paths.size);
           '
 
